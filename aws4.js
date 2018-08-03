@@ -22,6 +22,12 @@ function encodeRfc3986(urlEncodedString) {
   })
 }
 
+function lengthInUtf8Bytes(str) {
+  const m = encodeURIComponent(str).match(/%[89ABab]/g);
+  return str.length + (m ? m.length : 0);
+};
+
+
 // request: { path | body, [host], [method], [headers], [service], [region] }
 // credentials: { accessKeyId, secretAccessKey, [sessionToken] }
 function RequestSigner(request, credentials) {
@@ -116,7 +122,7 @@ RequestSigner.prototype.prepareRequest = function() {
         headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=utf-8'
 
       if (request.body && !headers['Content-Length'] && !headers['content-length'])
-        headers['Content-Length'] = Buffer.byteLength(request.body)
+        headers['Content-Length'] = String(lengthInUtf8Bytes(request.body))
 
       if (this.credentials.sessionToken && !headers['X-Amz-Security-Token'] && !headers['x-amz-security-token'])
         headers['X-Amz-Security-Token'] = this.credentials.sessionToken
