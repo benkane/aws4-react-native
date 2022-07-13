@@ -1,4 +1,5 @@
 var fs = require('fs'),
+    path = require('path'),
     should = require('should'),
     aws4 = require('../'),
     lru = require('../lru'),
@@ -12,19 +13,10 @@ var fs = require('fs'),
 
 describe('aws4', function() {
 
-  // Save and ensure we restore process.env
-  var envAccessKeyId, envSecretAccessKey
-
   before(function() {
-    envAccessKeyId = process.env.AWS_ACCESS_KEY_ID
-    envSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY
     process.env.AWS_ACCESS_KEY_ID = cred.accessKeyId
     process.env.AWS_SECRET_ACCESS_KEY = cred.secretAccessKey
-  })
-
-  after(function() {
-    process.env.AWS_ACCESS_KEY_ID = envAccessKeyId
-    process.env.AWS_SECRET_ACCESS_KEY = envSecretAccessKey
+    delete process.env.AWS_SESSION_TOKEN
   })
 
   describe('#sign() when constructed with string url', function() {
@@ -72,6 +64,48 @@ describe('aws4', function() {
       signer.region.should.equal('us-east-1')
     })
 
+    it('should recognise older S3 bare url', function() {
+      var signer = new RequestSigner('https://s3.amazonaws.com/jbarr-public/whatever')
+      signer.service.should.equal('s3')
+      signer.region.should.equal('us-east-1')
+    })
+
+    it('should recognise older S3 regional url', function() {
+      var signer = new RequestSigner('https://s3.eu-west-3.amazonaws.com/jbarr-public/whatever')
+      signer.service.should.equal('s3')
+      signer.region.should.equal('eu-west-3')
+    })
+
+    it('should recognise super old S3 regional url', function() {
+      var signer = new RequestSigner('https://s3-eu-west-1.amazonaws.com/jbarr-public/whatever')
+      signer.service.should.equal('s3')
+      signer.region.should.equal('eu-west-1')
+    })
+
+    it('should recognise newer S3 bare url', function() {
+      var signer = new RequestSigner('https://jbarr-public.s3.amazonaws.com/whatever')
+      signer.service.should.equal('s3')
+      signer.region.should.equal('us-east-1')
+    })
+
+    it('should recognise newer S3 bare url', function() {
+      var signer = new RequestSigner('https://jbarr-public.s3.amazonaws.com/whatever')
+      signer.service.should.equal('s3')
+      signer.region.should.equal('us-east-1')
+    })
+
+    it('should recognise newer S3 regional url', function() {
+      var signer = new RequestSigner('https://jbarr-public.s3.eu-west-3.amazonaws.com/whatever')
+      signer.service.should.equal('s3')
+      signer.region.should.equal('eu-west-3')
+    })
+
+    it('should recognise newer, but kinda older, S3 regional url', function() {
+      var signer = new RequestSigner('https://jbarr-public.s3-eu-west-1.amazonaws.com/whatever')
+      signer.service.should.equal('s3')
+      signer.region.should.equal('eu-west-1')
+    })
+
     it('should not set extra headers for CodeCommit Git access', function() {
       var signer = new RequestSigner({service: 'codecommit', method: 'GIT', host: 'example.com'})
       signer.prepareRequest()
@@ -113,21 +147,37 @@ describe('aws4', function() {
       opts.hostname.should.equal('sqs.us-east-1.amazonaws.com')
       opts.headers.Host.should.equal('sqs.us-east-1.amazonaws.com')
     })
+
     it('should add hostname and no region if service is regionless', function() {
       var opts = aws4.sign({service: 'iam'})
       opts.hostname.should.equal('iam.amazonaws.com')
       opts.headers.Host.should.equal('iam.amazonaws.com')
     })
+
     it('should add hostname and no region if s3 and us-east-1', function() {
       var opts = aws4.sign({service: 's3'})
       opts.hostname.should.equal('s3.amazonaws.com')
       opts.headers.Host.should.equal('s3.amazonaws.com')
     })
+
+    it('should not add bucket to hostname if dot in s3 bucket and us-east-1', function() {
+      var opts = aws4.sign({service: 's3', path: '/jbarr.public'})
+      opts.hostname.should.equal('s3.amazonaws.com')
+      opts.headers.Host.should.equal('s3.amazonaws.com')
+    })
+
+    it('should not add bucket to hostname if dot in s3 bucket and us-east-2', function() {
+      var opts = aws4.sign({service: 's3', region: 'us-east-2', path: '/jbarr.public/somefile'})
+      opts.hostname.should.equal('s3.us-east-2.amazonaws.com')
+      opts.headers.Host.should.equal('s3.us-east-2.amazonaws.com')
+    })
+
     it('should add hostname and no region if sdb and us-east-1', function() {
       var opts = aws4.sign({service: 'sdb'})
       opts.hostname.should.equal('sdb.amazonaws.com')
       opts.headers.Host.should.equal('sdb.amazonaws.com')
     })
+
     it('should populate AWS headers correctly', function() {
       var opts = aws4.sign({service: 'sqs', headers: {Date: date}})
       opts.headers['X-Amz-Date'].should.equal(iso)
@@ -141,11 +191,13 @@ describe('aws4', function() {
       opts.hostname.should.equal('glacier.us-west-1.amazonaws.com')
       opts.headers.Host.should.equal('glacier.us-west-1.amazonaws.com')
     })
+
     it('should add correct hostname for s3', function() {
       var opts = aws4.sign({service: 's3', region: 'us-west-1'})
-      opts.hostname.should.equal('s3-us-west-1.amazonaws.com')
-      opts.headers.Host.should.equal('s3-us-west-1.amazonaws.com')
+      opts.hostname.should.equal('s3.us-west-1.amazonaws.com')
+      opts.headers.Host.should.equal('s3.us-west-1.amazonaws.com')
     })
+
     it('should add correct hostname for ses', function() {
       var opts = aws4.sign({service: 'ses', region: 'us-west-1'})
       opts.hostname.should.equal('email.us-west-1.amazonaws.com')
@@ -159,6 +211,7 @@ describe('aws4', function() {
       opts.headers['X-Amz-Date'].should.equal(iso)
       opts.headers.Authorization.should.equal(auth)
     })
+
     it('should use custom port correctly', function() {
       var opts = aws4.sign({hostname: 'localhost', port: '9000', service: 's3', headers: {Date: date}})
       opts.headers['X-Amz-Date'].should.equal(iso)
@@ -175,6 +228,7 @@ describe('aws4', function() {
       opts.headers['X-Amz-Date'].should.equal(iso)
       opts.headers.Authorization.should.equal(auth)
     })
+
     it('should use custom port correctly', function() {
       var opts = aws4.sign({host: 'localhost', port: '9000', service: 's3', headers: {Date: date}})
       opts.headers['X-Amz-Date'].should.equal(iso)
@@ -190,6 +244,7 @@ describe('aws4', function() {
       var opts = aws4.sign({body: 'SomeAction'})
       opts.method.should.equal('POST')
     })
+
     it('should set Content-Type', function() {
       var opts = aws4.sign({body: 'SomeAction'})
       opts.headers['Content-Type'].should.equal('application/x-www-form-urlencoded; charset=utf-8')
@@ -208,6 +263,7 @@ describe('aws4', function() {
           Date: date,
           'Content-Type': 'application/x-amz-json-1.0',
           'X-Amz-Target': 'DynamoDB_20111205.ListTables',
+          'Connection': 'keep-alive',
         },
       })
       opts.headers['X-Amz-Date'].should.equal(iso)
@@ -236,6 +292,7 @@ describe('aws4', function() {
         'X-Amz-SignedHeaders=content-type%3Bhost%3Bx-amz-target&' +
         'X-Amz-Signature=3529a3f866ef85935692c2f2f6e8edb67de2ec91ce79ba5f1dbe28fc66cb154e')
     })
+
     it('should work with s3', function() {
       var opts = aws4.sign({
         service: 's3',
@@ -247,6 +304,7 @@ describe('aws4', function() {
         'X-Amz-Credential=ABCDEF%2F20121226%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-SignedHeaders=host&' +
         'X-Amz-Signature=1acb058aaf5ce6ea6125f03231ab2b64acc9ce05fd70e4c7f087515adc41814a')
     })
+
     it('should adhere to RFC-3986', function() {
       var opts = aws4.sign({
         service: 's3',
@@ -400,21 +458,21 @@ describe('aws4', function() {
     })
 
     it('should work with RFC-3986 chars with s3', function() {
-      var signer = new RequestSigner({service: 's3', path: '/!\'()*%21%27%28%29%2A'})
+      var signer = new RequestSigner({service: 's3', path: '/!\'()*@%21%27%28%29%2A?a=A&*=a&@=b'})
       var canonical = signer.canonicalString().split('\n')
 
-      canonical[1].should.equal('/%21%27%28%29%2A%21%27%28%29%2A')
-      canonical[2].should.equal('')
-      signer.sign().path.should.equal('/!\'()*%21%27%28%29%2A')
+      canonical[1].should.equal('/%21%27%28%29%2A%40%21%27%28%29%2A')
+      canonical[2].should.equal('%2A=a&%40=b&a=A')
+      signer.sign().path.should.equal('/!\'()*@%21%27%28%29%2A?a=A&%2A=a&%40=b')
     })
 
     it('should work with RFC-3986 chars with non-s3', function() {
-      var signer = new RequestSigner({service: 'es', path: '/!\'()*%21%27%28%29%2A'})
+      var signer = new RequestSigner({service: 'es', path: '/!\'()*@%21%27%28%29%2A?a=A&*=a&@=b'})
       var canonical = signer.canonicalString().split('\n')
 
-      canonical[1].should.equal('/%21%27%28%29%2A%2521%2527%2528%2529%252A')
-      canonical[2].should.equal('')
-      signer.sign().path.should.equal('/!\'()*%21%27%28%29%2A')
+      canonical[1].should.equal('/%21%27%28%29%2A%40%2521%2527%2528%2529%252A')
+      canonical[2].should.equal('%2A=a&%40=b&a=A')
+      signer.sign().path.should.equal('/!\'()*@%21%27%28%29%2A?a=A&%2A=a&%40=b')
     })
 
     it('should normalize casing on percent encoding with s3', function() {
@@ -451,6 +509,42 @@ describe('aws4', function() {
       canonical[1].should.equal('/%252f%252f')
       canonical[2].should.equal('')
       signer.sign().path.should.equal('/%2f%2f')
+    })
+
+    it('should decode + as space with s3', function() {
+      var signer = new RequestSigner({service: 's3', path: '/++'})
+      var canonical = signer.canonicalString().split('\n')
+
+      canonical[1].should.equal('/%20%20')
+      canonical[2].should.equal('')
+      signer.sign().path.should.equal('/++')
+    })
+
+    it('should just leave + on non-s3', function() {
+      var signer = new RequestSigner({service: 'es', path: '/++'})
+      var canonical = signer.canonicalString().split('\n')
+
+      canonical[1].should.equal('/%2B%2B')
+      canonical[2].should.equal('')
+      signer.sign().path.should.equal('/++')
+    })
+
+    it('should decode %2B with s3', function() {
+      var signer = new RequestSigner({service: 's3', path: '/%2b%2b'})
+      var canonical = signer.canonicalString().split('\n')
+
+      canonical[1].should.equal('/%2B%2B')
+      canonical[2].should.equal('')
+      signer.sign().path.should.equal('/%2b%2b')
+    })
+
+    it('should just escape %2B on non-s3', function() {
+      var signer = new RequestSigner({service: 'es', path: '/%2b%2b'})
+      var canonical = signer.canonicalString().split('\n')
+
+      canonical[1].should.equal('/%252b%252b')
+      canonical[2].should.equal('')
+      signer.sign().path.should.equal('/%2b%2b')
     })
 
     it('should work with mixed chars > 127 and < 255 and percent encoding with s3', function() {
@@ -526,21 +620,21 @@ describe('aws4', function() {
     })
 
     it('should work with query param order in s3', function() {
-      var signer = new RequestSigner({service: 's3', path: '/?a=b&a=B&a=b&a=c'})
+      var signer = new RequestSigner({service: 's3', path: '/?a-=a&a=b&a=B&a=b&a=c'})
       var canonical = signer.canonicalString().split('\n')
 
       canonical[1].should.equal('/')
-      canonical[2].should.equal('a=b')
-      signer.sign().path.should.equal('/?a=b&a=B&a=b&a=c')
+      canonical[2].should.equal('a=b&a-=a')
+      signer.sign().path.should.equal('/?a-=a&a=b&a=B&a=b&a=c')
     })
 
     it('should work with query param order in non-s3', function() {
-      var signer = new RequestSigner({service: 'es', path: '/?a=b&a=B&a=b&a=c'})
+      var signer = new RequestSigner({service: 'es', path: '/?a-=a&a=b&a=B&a=b&a=c'})
       var canonical = signer.canonicalString().split('\n')
 
       canonical[1].should.equal('/')
-      canonical[2].should.equal('a=B&a=b&a=b&a=c')
-      signer.sign().path.should.equal('/?a=b&a=B&a=b&a=c')
+      canonical[2].should.equal('a=B&a=b&a=b&a=c&a-=a')
+      signer.sign().path.should.equal('/?a-=a&a=b&a=B&a=b&a=c')
     })
 
     it('should not normalize path in s3', function() {
@@ -595,53 +689,30 @@ describe('aws4', function() {
       accessKeyId: 'AKIDEXAMPLE',
       secretAccessKey: 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY',
     }
-    var SERVICE = 'host'
+    var SERVICE = 'service'
+    var DATETIME = '20150830T123600Z'
 
-    var tests = fs.readdirSync(__dirname + '/fixtures')
-      .map(function(name) { return (name.match(/^(.+)\.authz/) || [])[1] })
-      .filter(Boolean)
+    awsFixtures().forEach(function(test) {
 
-    tests.forEach(function(test) {
-
-      it('should pass ' + test, function() {
-        var request = fs.readFileSync(__dirname + '/fixtures/' + test + '.req', 'utf8').replace(/\r/g, '')
-        var canonicalString = fs.readFileSync(__dirname + '/fixtures/' + test + '.creq', 'utf8').replace(/\r/g, '')
-        var stringToSign = fs.readFileSync(__dirname + '/fixtures/' + test + '.sts', 'utf8').replace(/\r/g, '')
-        var outputAuth = fs.readFileSync(__dirname + '/fixtures/' + test + '.authz', 'utf8').replace(/\r/g, '')
-
-        var reqLines = request.split('\n')
-        var req = reqLines[0].split(' ')
-        var method = req[0]
-        var path = req[1]
-        var headers = {}
-        for (var i = 1; i < reqLines.length; i++) {
-          if (!reqLines[i]) break
-          var colonIx = reqLines[i].indexOf(':')
-          var header = reqLines[i].slice(0, colonIx).toLowerCase()
-          var value = reqLines[i].slice(colonIx + 1)
-          if (headers[header]) {
-            headers[header] = headers[header].split(',')
-            headers[header].push(value)
-            headers[header] = headers[header].sort().join(',')
-          } else {
-            headers[header] = value
-          }
-        }
-        var body = reqLines.slice(i + 1).join('\n')
-
+      it('should pass ' + test.test, function() {
         var signer = new RequestSigner({
           service: SERVICE,
-          method: method,
-          path: path,
-          headers: headers,
-          body: body,
+          method: test.method,
+          host: test.host,
+          path: test.pathname,
+          headers: headerArrayToObject(test.headers),
+          body: test.body,
           doNotModifyHeaders: true,
           doNotEncodePath: true,
         }, CREDENTIALS)
 
-        signer.canonicalString().should.equal(canonicalString)
-        signer.stringToSign().should.equal(stringToSign)
-        signer.sign().headers.Authorization.should.equal(outputAuth)
+        if (signer.datetime == null) {
+          signer.datetime = DATETIME
+        }
+
+        signer.canonicalString().should.equal(test.canonicalString)
+        signer.stringToSign().should.equal(test.stringToSign)
+        signer.sign().headers.Authorization.should.equal(test.authHeader)
       })
 
     })
@@ -727,3 +798,71 @@ describe('lru', function() {
   })
 
 })
+
+
+function awsFixtures() {
+  return matchingFiles(path.join(__dirname, 'aws-sig-v4-test-suite'), /\.req$/).map(function(file) {
+    var test = file.split('/').pop().split('.')[0]
+    var filePieces = fs.readFileSync(file, 'utf8').trim().split('\n\n')
+    var preamble = filePieces[0]
+    var body = filePieces[1]
+    var lines = (preamble + '\n').split('\n')
+    var methodPath = lines[0].split(' ')
+    var method = methodPath[0]
+    var pathname = methodPath.slice(1, -1).join(' ')
+    var headerLines = lines.slice(1).join('\n').split(':')
+    var headers = []
+    var url = ''
+    var host = ''
+    for (var i = 0; i < headerLines.length - 1; i++) {
+      var name = headerLines[i]
+      var newlineIx = headerLines[i + 1].lastIndexOf('\n')
+      var value = headerLines[i + 1].slice(0, newlineIx)
+      headerLines[i + 1] = headerLines[i + 1].slice(newlineIx + 1)
+      if (name.toLowerCase() === 'host') {
+        host = value
+        url = 'https://' + value + pathname
+      } else {
+        value.split('\n').forEach(function(v) { headers.push([name, v]) })
+      }
+    }
+    var canonicalString = fs.readFileSync(file.replace(/\.req$/, '.creq'), 'utf8').trim()
+    var stringToSign = fs.readFileSync(file.replace(/\.req$/, '.sts'), 'utf8').trim()
+    var authHeader = fs.readFileSync(file.replace(/\.req$/, '.authz'), 'utf8').trim()
+
+    return {
+      test: test,
+      method: method,
+      url: url,
+      host: host,
+      pathname: pathname,
+      headers: headers,
+      body: body,
+      canonicalString: canonicalString,
+      stringToSign: stringToSign,
+      authHeader: authHeader,
+    }
+  })
+}
+
+function matchingFiles(dir, regex) {
+  var ls = fs.readdirSync(dir).map(function(file) { return path.join(dir, file) })
+  var dirs = ls.filter(function(file) { return fs.lstatSync(file).isDirectory() })
+  var files = ls.filter(regex.test.bind(regex))
+  dirs.forEach(function(dir) { files = files.concat(matchingFiles(dir, regex)) })
+  return files
+}
+
+function headerArrayToObject(headersList) {
+  var headers = Object.create(null)
+  headersList.forEach(function(headerEntry) {
+    var headerName = headerEntry[0]
+    var headerValue = headerEntry[1].trim()
+    if (headers[headerName] != null) {
+      headers[headerName] += ',' + headerValue
+    } else {
+      headers[headerName] = headerValue
+    }
+  })
+  return headers
+}
